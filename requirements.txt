@@ -1,0 +1,7 @@
+yfinance
+matplotlib
+dtw-python
+ccxt
+requests
+pandas
+numpy
