@@ -68,11 +68,10 @@ else:
         pass
 
 crypto_symbols = [
-    "BTC-USD", "ETH-USD", "BNB-USD", "XRP-USD", "SOL-USD", "DOGE-USD", "HYPE-USD", "ADA-USD", "LINK-USD", "NEAR-USD",
-    "SHIB-USD", "LTC-USD", "AVAX-USD", "DOT-USD", "WIF-USD", "ATOM-USD", "FIL-USD", "AR-USD", "TIA-USD", "KAITO-USD",
-    "H-USD", "PEPE-USD", "GRAM-USD", "SAND-USD", "MANA-USD", "IOTA-USD", "SKYAI-USD", "BTW-USD", "AIO-USD", "PROM-USD",
-    "STORJ-USD", "TUT-USD", "NIL-USD", "BEL-USD", "KOMA-USD", "WLFI-USD", "ASTER-USD", "FARTCOIN-USD", "BLESS-USD", "COAI-USD",
-    "PI-USD", "MVLL-USD", "CHOR-USD", "KORU-USD", "ONDO-USD", "DOGS-USD", "MEW-USD", "S-USD", "ARB-USD", "RE-USD"
+    "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "BNB-USD",
+    "VET-USD", "LINK-USD", "SHIB-USD", "DOGE-USD", "ADA-USD",
+    "SAND-USD", "AR-USD", "HBAR-USD", "IOTA-USD", "TRX-USD",
+    "AVAX-USD", "NEAR-USD", "ONDO-USD", "HYPE-USD", "FLOKI-USD"
 ]
 
 symbols_to_search = [
