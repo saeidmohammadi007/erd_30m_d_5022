@@ -25,41 +25,47 @@ W_MACD     = 0.5
 W_SMA      = 0.5
 
 # ═══════════ تنظیمات تلگرام (خواندن از متغیر محیطی) ═══════════
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8782544489:AAGE52tiaHi8IOmf0n9xxH0oZO0OoNyFJv8")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "6146445006")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
-    }
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"خطا در ارسال پیام تلگرام: {e}")
+if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+    def send_telegram_message(text):
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"خطا در ارسال پیام تلگرام: {e}")
 
-def send_telegram_long_message(text):
-    max_len = 4096
-    if len(text) <= max_len:
-        send_telegram_message(text)
-        return
+    def send_telegram_long_message(text):
+        max_len = 4096
+        if len(text) <= max_len:
+            send_telegram_message(text)
+            return
 
-    lines = text.split('\n')
-    chunk = ''
-    for line in lines:
-        if len(chunk) + len(line) + 1 > max_len:
-            if chunk:
-                send_telegram_message(chunk.strip())
-                chunk = line + '\n'
+        lines = text.split('\n')
+        chunk = ''
+        for line in lines:
+            if len(chunk) + len(line) + 1 > max_len:
+                if chunk:
+                    send_telegram_message(chunk.strip())
+                    chunk = line + '\n'
+                else:
+                    send_telegram_message(line[:max_len])
+                    chunk = ''
             else:
-                send_telegram_message(line[:max_len])
-                chunk = ''
-        else:
-            chunk += line + '\n'
-    if chunk.strip():
-        send_telegram_message(chunk.strip())
+                chunk += line + '\n'
+        if chunk.strip():
+            send_telegram_message(chunk.strip())
+else:
+    def send_telegram_message(text):
+        pass  # بدون توکن، هیچ پیامی ارسال نمی‌شود
+    def send_telegram_long_message(text):
+        pass
 
 crypto_symbols = [
     "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "BNB-USD",
