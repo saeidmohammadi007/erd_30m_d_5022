@@ -71,7 +71,13 @@ crypto_symbols = [
     "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "BNB-USD",
     "VET-USD", "LINK-USD", "SHIB-USD", "DOGE-USD", "ADA-USD",
     "SAND-USD", "AR-USD", "HBAR-USD", "IOTA-USD", "TRX-USD",
-    "AVAX-USD", "NEAR-USD", "ONDO-USD", "HYPE-USD", "FLOKI-USD"
+    "AVAX-USD", "NEAR-USD", "ONDO-USD", "HYPE-USD", "FLOKI-USD",
+    "BONK-USD", "YFI-USD", "TST-USD", "PONS-USD", "NIL-USD",
+    "SQD-USD", "BMT-USD", "BOME-USD", "CYS-USD", "GUN-USD",
+    "JTO-USD", "COAI-USD", "WLD-USD", "H-USD", "AIO-USD",
+    "RE-USD", "DODO-USD", "DELL-USD", "MYX-USD", "BEAT-USD",
+    "BLESS-USD", "PROM-USD", "VELVET-USD", "EVAA-USD", "BTW-USD",
+    "KAITO-USD", "TUT-USD", "MVLL-USD", "SKYAI-USD", "USELESS-USD"
 ]
 
 symbols_to_search = [
