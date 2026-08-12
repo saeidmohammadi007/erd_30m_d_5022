@@ -368,13 +368,13 @@ for crypto_symbol in crypto_symbols:
 
     selected_per_symbol.sort(key=lambda x: x[0])
     # آستانه را می‌توان با توجه به ویژگی جدید تنظیم کرد (مثلاً 0.025)
-    filtered_matches = [m for m in selected_per_symbol if m[0] < 0.02]
+    filtered_matches = [m for m in selected_per_symbol if m[0] < 0.03]   # ← تغییر از 0.02 به 0.03
 
     if not filtered_matches:
-        print(f"هیچ تطابقی با امتیاز زیر 0.02 برای {crypto_symbol} یافت نشد.")
+        print(f"هیچ تطابقی با امتیاز زیر 0.03 برای {crypto_symbol} یافت نشد.")   # ← تغییر
         continue
 
-    print(f"\nنتایج با امتیاز < 0.02 برای الگوی {crypto_symbol}:")
+    print(f"\nنتایج با امتیاز < 0.03 برای الگوی {crypto_symbol}:")   # ← تغییر
     print("─" * 80)
     for idx, (score, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low,
               dtw_macd, euc_macd, sym, start_date, _, _, _) in enumerate(filtered_matches):
@@ -456,7 +456,7 @@ for crypto_symbol in crypto_symbols:
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر + MACD (امتیاز < 0.02)', fontsize=16)
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر + MACD (امتیاز < 0.03)', fontsize=16)   # ← تغییر
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
