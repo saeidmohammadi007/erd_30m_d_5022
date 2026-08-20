@@ -14,7 +14,7 @@ import requests
 # ۰. تنظیمات ثابت
 # ═══════════════════════════════════════════════════════════
 n_candles = 150
-tf_input = "30m"
+tf_input = "4h"   # ✅ تغییر از "30m" به "4h"
 search_interval = "1d"
 
 # تنظیمات تلگرام
@@ -183,18 +183,11 @@ for crypto_symbol in crypto_symbols:
         print(f"  تعداد کندل‌های معتبر باند بولینگر ({len(bb_mid)}) کمتر از {n_candles} است. رد می‌شود.")
         continue
 
-    # ══════════════════════════════════════════════
-    # محاسبه خط MACD (فقط خط MACD) برای الگوی جاری
-    # ══════════════════════════════════════════════
-    macd_line = close_series.ewm(span=12, adjust=False).mean() - close_series.ewm(span=26, adjust=False).mean()
-    macd_line = macd_line.reindex(bb_mid.index)      # هم‌تراز با باندها
-    pattern_macd = macd_line.iloc[-n_candles:].values
-    pattern_macd_norm = z_norm(pattern_macd)
-
     pattern_upper = bb_upper.iloc[-n_candles:].values
     pattern_mid   = bb_mid.iloc[-n_candles:].values
     pattern_lower = bb_lower.iloc[-n_candles:].values
     pattern_dates = bb_upper.index[-n_candles:]
+    # حذف منطقهٔ زمانی برای مقایسهٔ ایمن با تاریخ‌های جستجو
     pattern_start_date = pattern_dates[0].normalize().tz_localize(None)
 
     pattern_norm_upper = z_norm(pattern_upper)
@@ -230,10 +223,6 @@ for crypto_symbol in crypto_symbols:
         upper = upper.reindex(mid.index)
         lower = lower.reindex(mid.index)
 
-        # محاسبه MACD برای نماد جستجو
-        macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
-        macd_line = macd_line.reindex(mid.index)  # هم‌تراز با mid
-
         N = len(mid)
         if N < n_candles:
             return mid, []
@@ -241,13 +230,13 @@ for crypto_symbol in crypto_symbols:
         mid_vals = mid.values
         upper_vals = upper.values
         lower_vals = lower.values
-        macd_vals = macd_line.values
 
         window_size = max(2, int(window_fraction * n_candles))
         raw_matches = []
 
         for i in range(N - n_candles + 1):
             window_end_date = mid.index[i + n_candles - 1]
+            # حذف منطقهٔ زمانی برای مقایسه
             window_end_date_naive = window_end_date.normalize().tz_localize(None)
             if window_end_date_naive >= pattern_start_date:
                 continue
@@ -255,12 +244,10 @@ for crypto_symbol in crypto_symbols:
             win_upper = upper_vals[i:i + n_candles]
             win_mid   = mid_vals[i:i + n_candles]
             win_lower = lower_vals[i:i + n_candles]
-            win_macd  = macd_vals[i:i + n_candles]
 
             win_upper_norm = z_norm(win_upper)
             win_mid_norm   = z_norm(win_mid)
             win_lower_norm = z_norm(win_lower)
-            win_macd_norm  = z_norm(win_macd)
 
             dtw_up = dtw(pattern_norm_upper, win_upper_norm,
                          keep_internals=False,
@@ -280,14 +267,7 @@ for crypto_symbol in crypto_symbols:
                           window_args={'window_size': window_size}).distance
             euc_low = np.sqrt(np.sum((pattern_norm_lower - win_lower_norm) ** 2))
 
-            dtw_macd = dtw(pattern_macd_norm, win_macd_norm,
-                           keep_internals=False,
-                           window_type='sakoechiba',
-                           window_args={'window_size': window_size}).distance
-            euc_macd = np.sqrt(np.sum((pattern_macd_norm - win_macd_norm) ** 2))
-
             raw_matches.append((dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low,
-                                dtw_macd, euc_macd,
                                 mid.index[i], win_upper, win_mid, win_lower))
 
         return mid, raw_matches
@@ -300,34 +280,32 @@ for crypto_symbol in crypto_symbols:
         all_mid_series[sym] = mid_series
         if raw_list:
             for item in raw_list:
+                # item: (dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low, start_date, w_up, w_mid, w_low)
                 global_raw_matches.append((sym,) + item)
 
     if not global_raw_matches:
         print("هیچ تطابقی برای این الگو یافت نشد. به نماد بعدی می‌رویم.")
         continue
 
-    # ایندکس‌ها: 1=dtw_up, 2=euc_up, 3=dtw_mid, 4=euc_mid, 5=dtw_low, 6=euc_low, 7=dtw_macd, 8=euc_macd
+    # اصلاح ایندکس‌ها: m[1]=dtw_up, m[2]=euc_up, m[3]=dtw_mid, ...
     dtw_up_all  = np.array([m[1] for m in global_raw_matches])
     euc_up_all  = np.array([m[2] for m in global_raw_matches])
     dtw_mid_all = np.array([m[3] for m in global_raw_matches])
     euc_mid_all = np.array([m[4] for m in global_raw_matches])
     dtw_low_all = np.array([m[5] for m in global_raw_matches])
     euc_low_all = np.array([m[6] for m in global_raw_matches])
-    dtw_macd_all = np.array([m[7] for m in global_raw_matches])
-    euc_macd_all = np.array([m[8] for m in global_raw_matches])
 
     ranges = {}
     for name, arr in [("dtw_up", dtw_up_all), ("euc_up", euc_up_all),
                       ("dtw_mid", dtw_mid_all), ("euc_mid", euc_mid_all),
-                      ("dtw_low", dtw_low_all), ("euc_low", euc_low_all),
-                      ("dtw_macd", dtw_macd_all), ("euc_macd", euc_macd_all)]:
+                      ("dtw_low", dtw_low_all), ("euc_low", euc_low_all)]:
         mn, mx = arr.min(), arr.max()
         rng = mx - mn if mx != mn else 1.0
         ranges[name] = (mn, rng)
 
     scored_matches = []
     for match in global_raw_matches:
-        sym, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low, dtw_macd, euc_macd, start_date, w_up, w_mid, w_low = match
+        sym, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low, start_date, w_up, w_mid, w_low = match
 
         n_dtw_up = norm(dtw_up, ranges["dtw_up"][0], ranges["dtw_up"][1])
         n_euc_up = norm(euc_up, ranges["euc_up"][0], ranges["euc_up"][1])
@@ -335,18 +313,15 @@ for crypto_symbol in crypto_symbols:
         n_euc_mid = norm(euc_mid, ranges["euc_mid"][0], ranges["euc_mid"][1])
         n_dtw_low = norm(dtw_low, ranges["dtw_low"][0], ranges["dtw_low"][1])
         n_euc_low = norm(euc_low, ranges["euc_low"][0], ranges["euc_low"][1])
-        n_dtw_macd = norm(dtw_macd, ranges["dtw_macd"][0], ranges["dtw_macd"][1])
-        n_euc_macd = norm(euc_macd, ranges["euc_macd"][0], ranges["euc_macd"][1])
 
-        final_score = (n_dtw_up + n_euc_up + n_dtw_mid + n_euc_mid +
-                       n_dtw_low + n_euc_low + n_dtw_macd + n_euc_macd) / 8
+        final_score = (n_dtw_up + n_euc_up + n_dtw_mid + n_euc_mid + n_dtw_low + n_euc_low) / 6
 
         scored_matches.append((final_score, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low,
-                               dtw_macd, euc_macd, sym, start_date, w_up, w_mid, w_low))
+                               sym, start_date, w_up, w_mid, w_low))
 
     symbol_matches = defaultdict(list)
     for m in scored_matches:
-        sym = m[9]   # sym is at index 9 now
+        sym = m[7]
         symbol_matches[sym].append(m)
 
     selected_per_symbol = []
@@ -354,10 +329,10 @@ for crypto_symbol in crypto_symbols:
         matches.sort(key=lambda x: x[0])
         selected = []
         for match in matches:
-            start = match[10]  # start_date at index 10
+            start = match[8]
             overlap = False
             for sel in selected:
-                if abs((start - sel[10]).days) < n_candles:
+                if abs((start - sel[8]).days) < n_candles:
                     overlap = True
                     break
             if not overlap:
@@ -367,23 +342,21 @@ for crypto_symbol in crypto_symbols:
         selected_per_symbol.extend(selected)
 
     selected_per_symbol.sort(key=lambda x: x[0])
-    # آستانه را می‌توان با توجه به ویژگی جدید تنظیم کرد (مثلاً 0.025)
-    filtered_matches = [m for m in selected_per_symbol if m[0] < 0.03]   # ← تغییر از 0.02 به 0.03
+    filtered_matches = [m for m in selected_per_symbol if m[0] < 0.02]
 
     if not filtered_matches:
-        print(f"هیچ تطابقی با امتیاز زیر 0.03 برای {crypto_symbol} یافت نشد.")   # ← تغییر
+        print(f"هیچ تطابقی با امتیاز زیر 0.02 برای {crypto_symbol} یافت نشد.")
         continue
 
-    print(f"\nنتایج با امتیاز < 0.03 برای الگوی {crypto_symbol}:")   # ← تغییر
+    print(f"\nنتایج با امتیاز < 0.02 برای الگوی {crypto_symbol}:")
     print("─" * 80)
     for idx, (score, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low,
-              dtw_macd, euc_macd, sym, start_date, _, _, _) in enumerate(filtered_matches):
+              sym, start_date, _, _, _) in enumerate(filtered_matches):
         star = "⭐" if idx == 0 else "  "
         print(f"{star} رتبه {idx+1}: {sym} | امتیاز: {score:.3f} | "
               f"DTW_UP:{dtw_up:.2f} EUC_UP:{euc_up:.2f} | "
               f"DTW_MID:{dtw_mid:.2f} EUC_MID:{euc_mid:.2f} | "
-              f"DTW_LOW:{dtw_low:.2f} EUC_LOW:{euc_low:.2f} | "
-              f"DTW_MACD:{dtw_macd:.2f} EUC_MACD:{euc_macd:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
+              f"DTW_LOW:{dtw_low:.2f} EUC_LOW:{euc_low:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
 
         msg = (
             f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
@@ -392,8 +365,7 @@ for crypto_symbol in crypto_symbols:
             f"⭐ <b>امتیاز:</b> {score:.3f}\n"
             f"<i>DTW_UP:</i> {dtw_up:.2f} | <i>EUC_UP:</i> {euc_up:.2f}\n"
             f"<i>DTW_MID:</i> {dtw_mid:.2f} | <i>EUC_MID:</i> {euc_mid:.2f}\n"
-            f"<i>DTW_LOW:</i> {dtw_low:.2f} | <i>EUC_LOW:</i> {euc_low:.2f}\n"
-            f"<i>DTW_MACD:</i> {dtw_macd:.2f} | <i>EUC_MACD:</i> {euc_macd:.2f}"
+            f"<i>DTW_LOW:</i> {dtw_low:.2f} | <i>EUC_LOW:</i> {euc_low:.2f}"
         )
         all_telegram_parts.append(msg)
 
@@ -434,7 +406,7 @@ for crypto_symbol in crypto_symbols:
         else:
             global_idx = data
             (score, dtw_up, euc_up, dtw_mid, euc_mid, dtw_low, euc_low,
-             dtw_macd, euc_macd, sym, start_date, w_up, w_mid, w_low) = filtered_matches[global_idx]
+             sym, start_date, w_up, w_mid, w_low) = filtered_matches[global_idx]
 
             color = symbol_colors.get(sym, 'gray')
             is_best = (global_idx == 0)
@@ -456,7 +428,7 @@ for crypto_symbol in crypto_symbols:
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر + MACD (امتیاز < 0.03)', fontsize=16)   # ← تغییر
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر (امتیاز < 0.02)', fontsize=16)
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
