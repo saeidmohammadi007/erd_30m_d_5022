@@ -17,8 +17,8 @@ n_candles = 150
 tf_input = "30m"
 search_interval = "1d"
 
-# آستانه امتیاز برای پذیرش تطابق (میانگین DTW بالا و پایین)
-score_threshold = 10   # 🔧 این مقدار را تغییر دهید
+# آستانه امتیاز برای پذیرش تطابق (با نرمال‌سازی درصدی معمولاً < 1)
+score_threshold = 1.0   # 🔧 این مقدار را تغییر دهید
 
 # تنظیمات تلگرام
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -124,6 +124,21 @@ def fetch_lbank_data(yahoo_symbol, tf):
     print(f"داده‌های LBank دریافت شد: {len(df)} کندل برای {lbank_pair}")
     return df
 
+def bollinger_pct(upper, lower):
+    """
+    تبدیل باندهای بولینگر به درصد انحراف از میانگین متحرک.
+    mid = (upper + lower) / 2
+    خروجی: upper_pct = (upper - mid) / mid , lower_pct = (lower - mid) / mid
+    """
+    upper = np.asarray(upper, dtype=float)
+    lower = np.asarray(lower, dtype=float)
+    mid = (upper + lower) / 2.0
+    # جلوگیری از تقسیم بر صفر
+    mid_safe = np.where(np.abs(mid) < 1e-12, 1e-12, mid)
+    upper_pct = (upper - mid) / mid_safe
+    lower_pct = (lower - mid) / mid_safe
+    return upper_pct, lower_pct
+
 all_telegram_parts = []
 
 for crypto_symbol in crypto_symbols:
@@ -177,16 +192,19 @@ for crypto_symbol in crypto_symbols:
         print(f"  تعداد کندل‌های معتبر باند بولینگر ({len(bb_mid)}) کمتر از {n_candles} است. رد می‌شود.")
         continue
 
-    # فقط دو خط upper و lower برای الگو (بدون نرمال‌سازی)
+    # استخراج الگو (فقط دو خط upper و lower)
     pattern_upper = bb_upper.iloc[-n_candles:].values
     pattern_lower = bb_lower.iloc[-n_candles:].values
     pattern_dates = bb_upper.index[-n_candles:]
     pattern_start_date = pattern_dates[0].normalize().tz_localize(None)
 
-    print(f"الگوی {crypto_symbol} ({tf_input}) با {n_candles} کندل استخراج شد (فقط دو خط).")
+    # نرمال‌سازی الگو به فرم درصدی
+    pattern_upper_pct, pattern_lower_pct = bollinger_pct(pattern_upper, pattern_lower)
+
+    print(f"الگوی {crypto_symbol} ({tf_input}) با {n_candles} کندل استخراج شد (نرمال‌سازی درصدی).")
     print(f"بازه الگو: {pattern_dates[0]} تا {pattern_dates[-1]}")
 
-    def search_raw_matches(symbol, interval="1d", window_fraction=0.5):
+    def search_raw_matches(symbol, pattern_upper_pct, pattern_lower_pct, interval="1d", window_fraction=0.5):
         df = yf.download(symbol, interval=interval, period="max")
         if df.empty:
             if symbol.endswith("-USD"):
@@ -231,13 +249,16 @@ for crypto_symbol in crypto_symbols:
             win_upper = upper_vals[i:i + n_candles]
             win_lower = lower_vals[i:i + n_candles]
 
-            # فقط DTW خام برای هر دو خط
-            dtw_up = dtw(pattern_upper, win_upper,
+            # نرمال‌سازی پنجره به فرم درصدی
+            win_upper_pct, win_lower_pct = bollinger_pct(win_upper, win_lower)
+
+            # محاسبه DTW روی داده‌های نرمال‌شده
+            dtw_up = dtw(pattern_upper_pct, win_upper_pct,
                          keep_internals=False,
                          window_type='sakoechiba',
                          window_args={'window_size': window_size}).distance
 
-            dtw_low = dtw(pattern_lower, win_lower,
+            dtw_low = dtw(pattern_lower_pct, win_lower_pct,
                           keep_internals=False,
                           window_type='sakoechiba',
                           window_args={'window_size': window_size}).distance
@@ -251,7 +272,7 @@ for crypto_symbol in crypto_symbols:
     global_raw_matches = []
 
     for sym in symbols_to_search:
-        mid_series, raw_list = search_raw_matches(sym, interval=search_interval, window_fraction=0.5)
+        mid_series, raw_list = search_raw_matches(sym, pattern_upper_pct, pattern_lower_pct, interval=search_interval, window_fraction=0.5)
         all_mid_series[sym] = mid_series
         if raw_list:
             for item in raw_list:
@@ -269,7 +290,7 @@ for crypto_symbol in crypto_symbols:
     for match in global_raw_matches:
         sym, dtw_up, dtw_low, start_date, w_up, w_low = match
 
-        # امتیاز = میانگین سادهٔ دو فاصلهٔ DTW خام
+        # امتیاز = میانگین سادهٔ دو فاصلهٔ DTW
         final_score = (dtw_up + dtw_low) / 2
 
         scored_matches.append((final_score, dtw_up, dtw_low,
@@ -298,7 +319,7 @@ for crypto_symbol in crypto_symbols:
         selected_per_symbol.extend(selected)
 
     selected_per_symbol.sort(key=lambda x: x[0])
-    # 🔧 استفاده از آستانه تنظیم‌شده
+    # فیلتر با آستانه تنظیم‌شده
     filtered_matches = [m for m in selected_per_symbol if m[0] < score_threshold]
 
     if not filtered_matches:
@@ -309,15 +330,15 @@ for crypto_symbol in crypto_symbols:
     print("─" * 80)
     for idx, (score, dtw_up, dtw_low, sym, start_date, _, _) in enumerate(filtered_matches):
         star = "⭐" if idx == 0 else "  "
-        print(f"{star} رتبه {idx+1}: {sym} | امتیاز: {score:.3f} | "
-              f"DTW_UP:{dtw_up:.2f} | DTW_LOW:{dtw_low:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
+        print(f"{star} رتبه {idx+1}: {sym} | امتیاز: {score:.4f} | "
+              f"DTW_UP:{dtw_up:.4f} | DTW_LOW:{dtw_low:.4f} | شروع: {start_date.strftime('%Y-%m-%d')}")
 
         msg = (
             f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
             f"🪙 <b>نماد:</b> {sym}\n"
             f"📅 <b>تاریخ شروع:</b> {start_date.strftime('%Y-%m-%d')}\n"
-            f"⭐ <b>امتیاز:</b> {score:.3f}\n"
-            f"<i>DTW_UP:</i> {dtw_up:.2f} | <i>DTW_LOW:</i> {dtw_low:.2f}"
+            f"⭐ <b>امتیاز:</b> {score:.4f}\n"
+            f"<i>DTW_UP:</i> {dtw_up:.4f} | <i>DTW_LOW:</i> {dtw_low:.4f}"
         )
         all_telegram_parts.append(msg)
 
@@ -373,12 +394,12 @@ for crypto_symbol in crypto_symbols:
             ax.plot(date_range, w_low, color=color, linewidth=lw, linestyle=':', label='Lower')
             title = f'{sym} #{global_idx+1}'
             if is_best: title += ' ⭐'
-            title += f'\nScore:{score:.3f} | {start_date.strftime("%Y-%m-%d")}'
+            title += f'\nScore:{score:.4f} | {start_date.strftime("%Y-%m-%d")}'
             ax.set_title(title, fontsize=8)
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر دوخطی (امتیاز < {score_threshold})', fontsize=16)
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر دوخطی (نرمال‌سازی درصدی، امتیاز < {score_threshold})', fontsize=16)
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
