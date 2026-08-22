@@ -127,8 +127,7 @@ def z_norm(seq):
         return seq - np.mean(seq)
     return (seq - np.mean(seq)) / std
 
-def norm(val, mn, rng):
-    return (val - mn) / rng if rng != 0 else 0.0
+# تابع norm دیگر استفاده نمی‌شود (حذف شد)
 
 all_telegram_parts = []
 
@@ -253,7 +252,7 @@ for crypto_symbol in crypto_symbols:
                           window_type='sakoechiba',
                           window_args={'window_size': window_size}).distance
 
-            # فاصله اقلیدسی حذف شد
+            # ذخیره فقط مقادیر DTW
             raw_matches.append((dtw_up, dtw_low,
                                 mid.index[i], win_upper, win_lower))
 
@@ -273,32 +272,25 @@ for crypto_symbol in crypto_symbols:
         print("هیچ تطابقی برای این الگو یافت نشد. به نماد بعدی می‌رویم.")
         continue
 
-    # استخراج آرایه‌های DTW
-    dtw_up_all  = np.array([m[1] for m in global_raw_matches])
-    dtw_low_all = np.array([m[2] for m in global_raw_matches])
-
-    ranges = {}
-    for name, arr in [("dtw_up", dtw_up_all), ("dtw_low", dtw_low_all)]:
-        mn, mx = arr.min(), arr.max()
-        rng = mx - mn if mx != mn else 1.0
-        ranges[name] = (mn, rng)
-
+    # ═══════════════════════════════════════════════════════════
+    # امتیازدهی بدون Min-Max سراسری؛ نرمال‌سازی بر اساس طول پنجره
+    # ═══════════════════════════════════════════════════════════
     scored_matches = []
     for match in global_raw_matches:
         sym, dtw_up, dtw_low, start_date, w_up, w_low = match
 
-        n_dtw_up = norm(dtw_up, ranges["dtw_up"][0], ranges["dtw_up"][1])
-        n_dtw_low = norm(dtw_low, ranges["dtw_low"][0], ranges["dtw_low"][1])
+        # متوسط فاصله به ازای هر نقطه
+        dtw_up_norm = dtw_up / n_candles
+        dtw_low_norm = dtw_low / n_candles
 
-        # امتیاز نهایی میانگین دو DTW
-        final_score = (n_dtw_up + n_dtw_low) / 2
+        final_score = (dtw_up_norm + dtw_low_norm) / 2
 
         scored_matches.append((final_score, dtw_up, dtw_low,
                                sym, start_date, w_up, w_low))
 
     symbol_matches = defaultdict(list)
     for m in scored_matches:
-        sym = m[3]   # جایگاه جدید نماد
+        sym = m[3]
         symbol_matches[sym].append(m)
 
     selected_per_symbol = []
@@ -306,7 +298,7 @@ for crypto_symbol in crypto_symbols:
         matches.sort(key=lambda x: x[0])
         selected = []
         for match in matches:
-            start = match[4]   # جایگاه جدید تاریخ شروع
+            start = match[4]
             overlap = False
             for sel in selected:
                 if abs((start - sel[4]).days) < n_candles:
@@ -319,25 +311,30 @@ for crypto_symbol in crypto_symbols:
         selected_per_symbol.extend(selected)
 
     selected_per_symbol.sort(key=lambda x: x[0])
-    filtered_matches = [m for m in selected_per_symbol if m[0] < 0.02]
+
+    # آستانه قابل تنظیم: متوسط فاصله به ازای هر نقطه کمتر از این مقدار
+    SCORE_THRESHOLD = 0.2
+    filtered_matches = [m for m in selected_per_symbol if m[0] < SCORE_THRESHOLD]
 
     if not filtered_matches:
-        print(f"هیچ تطابقی با امتیاز زیر 0.02 برای {crypto_symbol} یافت نشد.")
+        print(f"هیچ تطابقی با امتیاز زیر {SCORE_THRESHOLD} برای {crypto_symbol} یافت نشد.")
         continue
 
-    print(f"\nنتایج با امتیاز < 0.02 برای الگوی {crypto_symbol}:")
+    print(f"\nنتایج با امتیاز < {SCORE_THRESHOLD} برای الگوی {crypto_symbol}:")
     print("─" * 80)
     for idx, (score, dtw_up, dtw_low, sym, start_date, _, _) in enumerate(filtered_matches):
         star = "⭐" if idx == 0 else "  "
+        dtw_up_norm = dtw_up / n_candles
+        dtw_low_norm = dtw_low / n_candles
         print(f"{star} رتبه {idx+1}: {sym} | امتیاز: {score:.3f} | "
-              f"DTW_UP:{dtw_up:.2f} | DTW_LOW:{dtw_low:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
+              f"DTW_UP_norm:{dtw_up_norm:.3f} | DTW_LOW_norm:{dtw_low_norm:.3f} | شروع: {start_date.strftime('%Y-%m-%d')}")
 
         msg = (
             f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
             f"🪙 <b>نماد:</b> {sym}\n"
             f"📅 <b>تاریخ شروع:</b> {start_date.strftime('%Y-%m-%d')}\n"
             f"⭐ <b>امتیاز:</b> {score:.3f}\n"
-            f"<i>DTW_UP:</i> {dtw_up:.2f} | <i>DTW_LOW:</i> {dtw_low:.2f}"
+            f"<i>DTW_UP_norm:</i> {dtw_up_norm:.3f} | <i>DTW_LOW_norm:</i> {dtw_low_norm:.3f}"
         )
         all_telegram_parts.append(msg)
 
@@ -397,7 +394,7 @@ for crypto_symbol in crypto_symbols:
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر دوخطی (امتیاز < 0.02)', fontsize=16)
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - باند بولینگر دوخطی (امتیاز < {SCORE_THRESHOLD})', fontsize=16)
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
