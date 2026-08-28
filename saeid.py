@@ -278,7 +278,7 @@ for crypto_symbol in crypto_symbols:
 
     selected_per_symbol.sort(key=lambda x: x[0])
 
-    SCORE_THRESHOLD = 0.08   # امتیاز میانگین فاصله به ازای هر نقطه
+    SCORE_THRESHOLD = 0.150   # امتیاز میانگین فاصله به ازای هر نقطه
     filtered_matches = [m for m in selected_per_symbol if m[0] < SCORE_THRESHOLD]
 
     if not filtered_matches:
