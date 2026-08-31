@@ -283,14 +283,14 @@ for crypto_symbol in crypto_symbols:
 
     selected_per_symbol.sort(key=lambda x: x[0])
 
-    SCORE_THRESHOLD = 0.130   # امتیاز میانگین فاصله به ازای هر نقطه
-    filtered_matches = [m for m in selected_per_symbol if m[0] < SCORE_THRESHOLD]
+    # بدون آستانه: استفاده از تمام تطابق‌های انتخاب شده
+    filtered_matches = selected_per_symbol
 
     if not filtered_matches:
-        print(f"هیچ تطابقی با امتیاز زیر {SCORE_THRESHOLD} برای {crypto_symbol} یافت نشد.")
+        print(f"هیچ تطابقی برای {crypto_symbol} یافت نشد.")
         continue
 
-    print(f"\nنتایج با امتیاز < {SCORE_THRESHOLD} برای الگوی {crypto_symbol}:")
+    print(f"\nنتایج برای الگوی {crypto_symbol}:")
     print("─" * 80)
     for idx, (score, dtw_dist, sym, start_date, _) in enumerate(filtered_matches):
         star = "⭐" if idx == 0 else "  "
@@ -359,7 +359,7 @@ for crypto_symbol in crypto_symbols:
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - RSI (امتیاز < {SCORE_THRESHOLD})', fontsize=16)
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - RSI (بدون آستانه امتیاز)', fontsize=16)
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
