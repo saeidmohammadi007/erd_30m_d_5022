@@ -13,11 +13,10 @@ import requests
 # ═══════════════════════════════════════════════════════════
 # ۰. تنظیمات ثابت
 # ═══════════════════════════════════════════════════════════
-n_candles = 150         # تعداد کندل‌های الگو
+n_candles = 60          # تعداد کندل‌های الگو
 tf_input = "30m"
 search_interval = "1d"
 rsi_period = 14          # دوره RSI
-sma_window = 14          # پنجره میانگین متحرک روی RSI (SMA14)
 
 # تنظیمات تلگرام
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -178,25 +177,22 @@ for crypto_symbol in crypto_symbols:
     if resample_rule:
         close_series = close_series.resample(resample_rule).last().dropna()
 
-    # محاسبه RSI
+    # محاسبه RSI خام
     rsi_series = compute_rsi(close_series, rsi_period)
     rsi_series = rsi_series.dropna()
 
-    # محاسبه SMA(14) روی RSI
-    sma_rsi_series = rsi_series.rolling(window=sma_window).mean().dropna()
-
-    if len(sma_rsi_series) < n_candles:
-        print(f"  تعداد کندل‌های معتبر SMA(RSI) ({len(sma_rsi_series)}) کمتر از {n_candles} است. رد می‌شود.")
+    if len(rsi_series) < n_candles:
+        print(f"  تعداد کندل‌های معتبر RSI ({len(rsi_series)}) کمتر از {n_candles} است. رد می‌شود.")
         continue
 
-    # الگو از آخرین n_candles از SMA(RSI)
-    pattern_rsi = sma_rsi_series.iloc[-n_candles:].values
-    pattern_dates = sma_rsi_series.index[-n_candles:]
+    # الگو از آخرین n_candles از RSI خام
+    pattern_rsi = rsi_series.iloc[-n_candles:].values
+    pattern_dates = rsi_series.index[-n_candles:]
     pattern_start_date = pattern_dates[0].normalize().tz_localize(None)
 
     pattern_norm = z_norm(pattern_rsi)
 
-    print(f"الگوی {crypto_symbol} ({tf_input}) با {n_candles} کندل از SMA(RSI) استخراج شد.")
+    print(f"الگوی {crypto_symbol} ({tf_input}) با {n_candles} کندل از RSI استخراج شد.")
     print(f"بازه الگو: {pattern_dates[0]} تا {pattern_dates[-1]}")
 
     def search_raw_matches(symbol, interval="1d", window_fraction=0.5):
@@ -217,22 +213,17 @@ for crypto_symbol in crypto_symbols:
             return None, []
 
         rsi_line = compute_rsi(close, rsi_period).dropna()
-        if len(rsi_line) < sma_window:   # حداقل برای محاسبه SMA
+
+        if len(rsi_line) < n_candles:
             return None, []
 
-        # محاسبه SMA(RSI)
-        sma_rsi_line = rsi_line.rolling(window=sma_window).mean().dropna()
-
-        if len(sma_rsi_line) < n_candles:
-            return None, []
-
-        N = len(sma_rsi_line)
-        rsi_vals = sma_rsi_line.values
+        N = len(rsi_line)
+        rsi_vals = rsi_line.values
         window_size = max(2, int(window_fraction * n_candles))
         raw_matches = []
 
         for i in range(N - n_candles + 1):
-            window_end_date = sma_rsi_line.index[i + n_candles - 1]
+            window_end_date = rsi_line.index[i + n_candles - 1]
             window_end_date_naive = window_end_date.normalize().tz_localize(None)
             if window_end_date_naive >= pattern_start_date:
                 continue
@@ -245,16 +236,16 @@ for crypto_symbol in crypto_symbols:
                            window_type='sakoechiba',
                            window_args={'window_size': window_size}).distance
 
-            raw_matches.append((dtw_dist, sma_rsi_line.index[i], win_rsi))
+            raw_matches.append((dtw_dist, rsi_line.index[i], win_rsi))
 
-        return sma_rsi_line, raw_matches   # بازگشت سری SMA به عنوان مرجع (اختیاری)
+        return rsi_line, raw_matches
 
     all_rsi_series = {}
     global_raw_matches = []
 
     for sym in symbols_to_search:
-        sma_rsi_series_sym, raw_list = search_raw_matches(sym, interval=search_interval, window_fraction=0.5)
-        all_rsi_series[sym] = sma_rsi_series_sym
+        rsi_series_sym, raw_list = search_raw_matches(sym, interval=search_interval, window_fraction=0.5)
+        all_rsi_series[sym] = rsi_series_sym
         if raw_list:
             for item in raw_list:
                 global_raw_matches.append((sym,) + item)
@@ -340,7 +331,7 @@ for crypto_symbol in crypto_symbols:
 
         kind, data = content
         if kind == "pattern":
-            ax.plot(pattern_dates, pattern_rsi, label='SMA(RSI)', color='purple', linewidth=2)
+            ax.plot(pattern_dates, pattern_rsi, label='RSI', color='purple', linewidth=2)
             title = f'Pattern: {crypto_symbol} ({tf_input})'
             if i == 0: title += ' (start)'
             elif i == 49: title += ' (end)'
@@ -362,7 +353,7 @@ for crypto_symbol in crypto_symbols:
             date_range = pd.date_range(start=start_date, end=end_date, periods=n_candles)
 
             lw = 2.5 if is_best else 1.5
-            ax.plot(date_range, win_rsi, color=color, linewidth=lw, linestyle='-', label='SMA(RSI)')
+            ax.plot(date_range, win_rsi, color=color, linewidth=lw, linestyle='-', label='RSI')
             title = f'{sym} #{global_idx+1}'
             if is_best: title += ' ⭐'
             title += f'\nScore:{score:.3f} | {start_date.strftime("%Y-%m-%d")}'
@@ -370,7 +361,7 @@ for crypto_symbol in crypto_symbols:
             ax.legend(fontsize=6)
             ax.grid(True)
 
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - SMA(RSI) (امتیاز < {SCORE_THRESHOLD})', fontsize=16)
+    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - RSI (امتیاز < {SCORE_THRESHOLD})', fontsize=16)
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
