@@ -13,7 +13,7 @@ import requests
 # ═══════════════════════════════════════════════════════════
 # ۰. تنظیمات ثابت
 # ═══════════════════════════════════════════════════════════
-n_candles = 120          # تعداد کندل‌های الگو  ← تغییر یافته از 60 به 120
+n_candles = 120          # تعداد کندل‌های الگو
 tf_input = "30m"
 search_interval = "1d"
 macd_fast = 12          # دورهٔ میانگین سریع برای MACD
@@ -282,84 +282,54 @@ for crypto_symbol in crypto_symbols:
 
     selected_per_symbol.sort(key=lambda x: x[0])
 
-    # حذف آستانه امتیاز: تمام تطابق‌های انتخاب‌شده (حداکثر ۲ برای هر نماد) در نظر گرفته می‌شوند
-    filtered_matches = selected_per_symbol
-
-    if not filtered_matches:
+    # ═══════════════════════════════════════════════════════════
+    # تغییر اصلی: حذف آستانه و انتخاب بهترین تطابق
+    # ═══════════════════════════════════════════════════════════
+    if not selected_per_symbol:
         print(f"هیچ تطابقی برای {crypto_symbol} یافت نشد.")
         continue
 
-    print(f"\nنتایج برای الگوی {crypto_symbol}:")
+    best_match = min(selected_per_symbol, key=lambda x: x[0])  # کمترین امتیاز
+    filtered_matches = [best_match]
+
+    print(f"\nبهترین تطابق برای الگوی {crypto_symbol}:")
     print("─" * 80)
-    for idx, (score, dtw_dist, sym, start_date, _) in enumerate(filtered_matches):
-        star = "⭐" if idx == 0 else "  "
-        print(f"{star} رتبه {idx+1}: {sym} | امتیاز: {score:.3f} | DTW: {dtw_dist:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
+    score, dtw_dist, sym, start_date, _ = best_match
+    print(f"⭐ {sym} | امتیاز: {score:.3f} | DTW: {dtw_dist:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
 
-        msg = (
-            f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
-            f"🪙 <b>نماد:</b> {sym}\n"
-            f"📅 <b>تاریخ شروع:</b> {start_date.strftime('%Y-%m-%d')}\n"
-            f"⭐ <b>امتیاز:</b> {score:.3f}\n"
-            f"<i>DTW raw:</i> {dtw_dist:.2f}"
-        )
-        all_telegram_parts.append(msg)
+    msg = (
+        f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
+        f"🪙 <b>نماد:</b> {sym}\n"
+        f"📅 <b>تاریخ شروع:</b> {start_date.strftime('%Y-%m-%d')}\n"
+        f"⭐ <b>امتیاز:</b> {score:.3f}\n"
+        f"<i>DTW raw:</i> {dtw_dist:.2f}"
+    )
+    all_telegram_parts.append(msg)
 
-    n_matches = len(filtered_matches)
-    fig, axes = plt.subplots(10, 5, figsize=(25, 50))
-    axes = axes.flatten()
+    # ═══════════════════════════════════════════════════════════
+    # رسم نمودار ساده: الگو و بهترین تطابق
+    # ═══════════════════════════════════════════════════════════
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
 
-    # برای نمایش الگو در سه نقطه (آغاز، میانه، پایان) از میان ۵۰ زیرنمودار
-    pattern_indices = [0, 24, 49]   # موقعیت‌های ثابت در لیست ۵۰ تایی
-    plot_data = [None] * 50
-    for idx in pattern_indices:
-        plot_data[idx] = ("pattern", None)
+    # نمودار الگو
+    axes[0].plot(pattern_dates, pattern_macd, label='MACD', color='purple', linewidth=2)
+    axes[0].set_title(f'Pattern: {crypto_symbol} ({tf_input})')
+    axes[0].legend()
+    axes[0].grid(True)
 
-    match_idx = 0
-    for i in range(50):
-        if plot_data[i] is None and match_idx < n_matches:
-            plot_data[i] = ("match", match_idx)
-            match_idx += 1
+    # نمودار بهترین تطابق
+    color = symbol_colors.get(sym, 'gray')
+    if search_interval == "1d":
+        end_date = start_date + pd.DateOffset(days=n_candles - 1)
+    else:
+        end_date = start_date + pd.DateOffset(weeks=n_candles - 1)
+    date_range = pd.date_range(start=start_date, end=end_date, periods=n_candles)
+    axes[1].plot(date_range, best_match[4], color=color, linewidth=2.5, label='MACD')
+    axes[1].set_title(f'Best Match: {sym}\nScore: {score:.3f} | {start_date.strftime("%Y-%m-%d")}')
+    axes[1].legend()
+    axes[1].grid(True)
 
-    for i in range(50):
-        content = plot_data[i]
-        ax = axes[i]
-        if content is None:
-            ax.set_visible(False)
-            continue
-
-        kind, data = content
-        if kind == "pattern":
-            ax.plot(pattern_dates, pattern_macd, label='MACD', color='purple', linewidth=2)
-            title = f'Pattern: {crypto_symbol} ({tf_input})'
-            if i == 0: title += ' (start)'
-            elif i == 49: title += ' (end)'
-            else: title += ' (middle)'
-            ax.set_title(title, fontsize=9)
-            ax.legend(fontsize=7)
-            ax.grid(True)
-        else:
-            global_idx = data
-            (score, dtw_dist, sym, start_date, win_macd) = filtered_matches[global_idx]
-
-            color = symbol_colors.get(sym, 'gray')
-            is_best = (global_idx == 0)
-
-            if search_interval == "1d":
-                end_date = start_date + pd.DateOffset(days=n_candles - 1)
-            else:
-                end_date = start_date + pd.DateOffset(weeks=n_candles - 1)
-            date_range = pd.date_range(start=start_date, end=end_date, periods=n_candles)
-
-            lw = 2.5 if is_best else 1.5
-            ax.plot(date_range, win_macd, color=color, linewidth=lw, linestyle='-', label='MACD')
-            title = f'{sym} #{global_idx+1}'
-            if is_best: title += ' ⭐'
-            title += f'\nScore:{score:.3f} | {start_date.strftime("%Y-%m-%d")}'
-            ax.set_title(title, fontsize=8)
-            ax.legend(fontsize=6)
-            ax.grid(True)
-
-    plt.suptitle(f'تحلیل الگوی {crypto_symbol} - MACD', fontsize=16)
+    plt.suptitle(f'Best match for {crypto_symbol} pattern (MACD)')
     plt.tight_layout()
     plt.savefig(f"pattern_plot_{crypto_symbol}.png")
     plt.close(fig)
