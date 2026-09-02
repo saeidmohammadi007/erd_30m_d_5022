@@ -1,7 +1,7 @@
 yfinance
-matplotlib
-dtw-python
-ccxt
+pycoingecko
+tqdm
 requests
-pandas
+ccxt
 numpy
+pandas
