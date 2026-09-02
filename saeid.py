@@ -1,363 +1,200 @@
 import os
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from dtw import dtw
-import ccxt
-from collections import defaultdict
+import yfinance as yf
+from tqdm import tqdm
+import time
 import requests
+import ccxt
 
-# ═══════════════════════════════════════════════════════════
-# ۰. تنظیمات ثابت
-# ═══════════════════════════════════════════════════════════
-n_candles = 120          # تعداد کندل‌های الگوی بلند
-n_candles_short = 25     # تعداد کندل‌های الگوی کوتاه (جدید)
-tf_input = "30m"
-search_interval = "1d"
-macd_fast = 12          # دورهٔ میانگین سریع برای MACD
-macd_slow = 26          # دورهٔ میانگین کند برای MACD
+FAST, SLOW = 12, 26
+PATTERN_START, PATTERN_END = '2015-02-02', '2016-08-08'
+SHOW_N = 10
 
-# تنظیمات تلگرام
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
+# ---------- توابع ----------
+def get_lbank_futures_symbols():
+    exchange = ccxt.lbank({'options': {'defaultType': 'future'}})
+    try:
+        markets = exchange.load_markets()
+    except Exception as e:
+        print(f"❌ خطا در اتصال به LBank: {e}")
+        return []
 
-if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-    def send_telegram_message(text):
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
-        try:
-            requests.post(url, json=payload, timeout=10)
-        except Exception as e:
-            print(f"خطا در ارسال پیام تلگرام: {e}")
+    base_list = []
+    for symbol, market in markets.items():
+        if not market.get('swap'):
+            continue
+        base = market.get('base')
+        if not base or base.isdigit():
+            continue
+        base_list.append(base.upper())
 
-    def send_telegram_long_message(text):
-        max_len = 4096
-        if len(text) <= max_len:
-            send_telegram_message(text)
-            return
-        lines = text.split('\n')
-        chunk = ''
-        for line in lines:
-            if len(chunk) + len(line) + 1 > max_len:
-                if chunk:
-                    send_telegram_message(chunk.strip())
-                    chunk = line + '\n'
-                else:
-                    send_telegram_message(line[:max_len])
-                    chunk = ''
-            else:
-                chunk += line + '\n'
-        if chunk.strip():
-            send_telegram_message(chunk.strip())
-else:
-    def send_telegram_message(text): pass
-    def send_telegram_long_message(text): pass
+    seen = set()
+    unique_bases = []
+    for b in base_list:
+        if b not in seen:
+            seen.add(b)
+            unique_bases.append(b)
+    print(f"✅ تعداد ارزهای پایه‌ی منحصربه‌فرد فیوچرز LBank: {len(unique_bases)}")
+    return unique_bases
 
-crypto_symbols = [
-    "BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD", "BNB-USD",
-    "VET-USD", "LINK-USD", "SHIB-USD", "DOGE-USD", "ADA-USD",
-    "SAND-USD", "AR-USD", "HBAR-USD", "IOTA-USD", "TRX-USD",
-    "AVAX-USD", "NEAR-USD", "ONDO-USD", "HYPE-USD", "FLOKI-USD",
-    "BONK-USD", "YFI-USD", "TST-USD", "PONS-USD", "NIL-USD",
-    "SQD-USD", "BMT-USD", "BOME-USD", "CYS-USD", "GUN-USD",
-    "JTO-USD", "COAI-USD", "WLD-USD", "H-USD", "AIO-USD",
-    "RE-USD", "DODO-USD", "DELL-USD", "MYX-USD", "BEAT-USD",
-    "BLESS-USD", "PROM-USD", "VELVET-USD", "EVAA-USD", "BTW-USD",
-    "KAITO-USD", "TUT-USD", "MVLL-USD", "SKYAI-USD", "USELESS-USD"
-]
-
-symbols_to_search = [
-    "AAPL", "GC=F",
-    "ETH-USD", "XRP-USD", "LTC-USD", "BTC-USD", "DOGE-USD",
-    "BNB-USD", "ADA-USD", "LINK-USD", "VET-USD",
-    "TRX-USD", "ATOM-USD", "XTZ-USD", "HBAR-USD",
-    "XLM-USD", "IOTA-USD", "SOL-USD", "FIL-USD",
-    "AVAX-USD", "DOT-USD", "SHIB-USD"
-]
-
-symbol_colors = {
-    "AAPL": "#1f77b4", "GC=F": "#ff7f0e",
-    "XRP-USD": "#2ca02c", "LTC-USD": "#d62728",
-    "BTC-USD": "#9467bd", "DOGE-USD": "#8c564b",
-    "BNB-USD": "#e377c2", "ADA-USD": "#7f7f7f",
-    "LINK-USD": "#bcbd22", "VET-USD": "#17becf",
-    "TRX-USD": "#aec7e8", "ATOM-USD": "#ffbb78",
-    "XTZ-USD": "#98df8a", "HBAR-USD": "#ff9896",
-    "XLM-USD": "#c5b0d5", "IOTA-USD": "#c49c94",
-    "SOL-USD": "#f7b6d2", "FIL-USD": "#dbdb8d",
-    "AVAX-USD": "#9edae5", "DOT-USD": "#393b79",
-    "SHIB-USD": "#e7ba52", "ETH-USD": "#ff6347",
-    "SAND-USD": "#f39c12", "AR-USD": "#2ecc71"
-}
-
-def fetch_lbank_data(yahoo_symbol, tf):
-    print(f"Yahoo داده‌ای برای {yahoo_symbol} ندارد. دریافت از LBank...")
-    base = yahoo_symbol.upper().replace("-USD", "").replace("/USD", "")
-    lbank_pair = f"{base}/USDT"
-    tf_map = {"5m": "5m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d", "1wk": "1w"}
-    lbank_tf = tf_map.get(tf, "1d")
-    exchange = ccxt.lbank({'enableRateLimit': True})
-    since = exchange.parse8601('2017-01-01T00:00:00Z')
-    all_candles = []
-    limit = 1000
-    while True:
-        try:
-            candles = exchange.fetch_ohlcv(lbank_pair, timeframe=lbank_tf, since=since, limit=limit)
-        except Exception as e:
-            print(f"خطا در دریافت از LBank: {e}")
-            break
-        if not candles:
-            break
-        all_candles += candles
-        since = candles[-1][0] + 1
-        if len(candles) < limit:
-            break
-    if not all_candles:
-        raise ValueError(f"LBank نیز داده‌ای برای {lbank_pair} ندارد.")
-    df = pd.DataFrame(all_candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
-    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-    print(f"داده‌های LBank دریافت شد: {len(df)} کندل برای {lbank_pair}")
+def get_weekly_data(ticker):
+    df = yf.download(ticker, start='2015-01-01', interval='1wk', progress=False, auto_adjust=False)
+    if df.empty:
+        return None
+    df = df[['Open', 'High', 'Low', 'Close']].copy()
+    df.index = pd.to_datetime(df.index)
+    df.columns = ['open', 'high', 'low', 'close']
     return df
 
-def z_norm(seq):
-    std = np.std(seq)
-    if std == 0:
-        return seq - np.mean(seq)
-    return (seq - np.mean(seq)) / std
+def get_30m_data(ticker):
+    df = yf.download(ticker, period='60d', interval='30m', progress=False, auto_adjust=False)
+    if df.empty:
+        return None
+    df = df[['Open', 'High', 'Low', 'Close']].copy()
+    df.index = pd.to_datetime(df.index)
+    df.columns = ['open', 'high', 'low', 'close']
+    return df
 
-def compute_macd_line(close_series, fast=12, slow=26):
-    """محاسبه خط MACD (تفاضل دو میانگین نمایی)"""
-    ema_fast = close_series.ewm(span=fast, adjust=False).mean()
-    ema_slow = close_series.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    return macd_line
+def macd_line(close_series):
+    ema_fast = close_series.ewm(span=FAST, adjust=False).mean()
+    ema_slow = close_series.ewm(span=SLOW, adjust=False).mean()
+    return ema_fast - ema_slow
 
-all_telegram_parts = []
+def dtw_distance(x, y, window=None):
+    n = len(x)
+    dtw = np.full((n+1, n+1), np.inf)
+    dtw[0, 0] = 0.0
+    for i in range(1, n+1):
+        if window is None:
+            j_start, j_end = 1, n
+        else:
+            j_start = max(1, i - window)
+            j_end = min(n, i + window)
+        for j in range(j_start, j_end+1):
+            cost = (x[i-1] - y[j-1]) ** 2
+            dtw[i, j] = cost + min(dtw[i-1, j], dtw[i, j-1], dtw[i-1, j-1])
+    return np.sqrt(dtw[n, n])
 
-for crypto_symbol in crypto_symbols:
-    print(f"\n{'='*80}")
-    print(f"شروع تحلیل برای نماد الگو: {crypto_symbol}")
-    print(f"{'='*80}")
+def euclidean_distance(x, y):
+    return np.sqrt(np.sum((x - y) ** 2))
 
-    if tf_input == "4h":
-        download_interval = "1h"
-        resample_rule = "4h"
-    elif tf_input == "5m":
-        download_interval = "5m"
-        resample_rule = None
-    elif tf_input == "30m":
-        download_interval = "30m"
-        resample_rule = None
-    elif tf_input == "1wk":
-        download_interval = "1wk"
-        resample_rule = None
-    else:
-        download_interval = "1d"
-        resample_rule = None
+def send_telegram_message(text):
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    if not token or not chat_id:
+        print("❌ توکن یا chat_id تنظیم نشده است.")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML'
+    }
+    try:
+        r = requests.post(url, data=payload, timeout=10)
+        if r.status_code != 200:
+            print(f"⚠️ خطا در ارسال پیام: {r.text}")
+        else:
+            print("✅ پیام با موفقیت به تلگرام ارسال شد.")
+    except Exception as e:
+        print(f"❌ خطا در ارسال به تلگرام: {e}")
 
-    crypto_df = yf.download(crypto_symbol, interval=download_interval, period="max")
-    if crypto_df.empty:
-        try:
-            crypto_df = fetch_lbank_data(crypto_symbol, download_interval)
-        except:
-            print(f"  داده‌ای برای {crypto_symbol} یافت نشد. رد می‌شود.")
+# ---------- اجرای اصلی ----------
+print("🔍 استخراج الگوی هفتگی بیت‌کوین ...")
+btc_w = get_weekly_data('BTC-USD')
+if btc_w is None:
+    print("❌ خطا در دریافت داده‌های بیت‌کوین")
+    exit()
+
+btc_macd = macd_line(btc_w['close']).dropna()
+mask = (btc_macd.index >= PATTERN_START) & (btc_macd.index <= PATTERN_END)
+pattern = btc_macd[mask].values
+L = len(pattern)
+print(f"✅ الگوی مرجع (هفتگی) با {L} کندل")
+
+pattern_mean = np.mean(pattern)
+pattern_std = np.std(pattern) + 1e-9
+pat_norm = (pattern - pattern_mean) / pattern_std
+
+WINDOW = max(1, int(0.5 * L))
+print(f"🔹 پنجره DTW (Sakoe-Chiba): {WINDOW}")
+
+print("\n📊 دریافت نمادهای فیوچرز LBank ...")
+top_symbols = get_lbank_futures_symbols()
+
+if len(top_symbols) == 0:
+    print("❌ هیچ نمادی برای اسکن وجود ندارد!")
+    exit()
+
+results = []
+for sym in tqdm(top_symbols, desc="اسکن ۳۰ دقیقه‌ای"):
+    try:
+        df_30m = get_30m_data(f"{sym}-USD")
+        if df_30m is None or len(df_30m) < L + 30:
             continue
-    if crypto_df.empty:
-        print(f"  داده‌ای برای {crypto_symbol} خالی است. رد می‌شود.")
+
+        macd = macd_line(df_30m['close']).dropna()
+        if len(macd) < L:
+            continue
+
+        current = macd.iloc[-L:].values
+        cur_mean = np.mean(current)
+        cur_std = np.std(current) + 1e-9
+        cur_norm = (current - cur_mean) / cur_std
+
+        dist_dtw = dtw_distance(pat_norm, cur_norm, window=WINDOW)
+        dist_euc = euclidean_distance(pat_norm, cur_norm)
+
+        last_time = macd.index[-1].strftime('%Y-%m-%d %H:%M')
+        results.append({
+            'symbol': sym,
+            'dist_dtw': dist_dtw,
+            'dist_euc': dist_euc,
+            'last_30m': last_time
+        })
+        time.sleep(0.3)
+    except Exception:
         continue
 
-    close_series = crypto_df['Close'].dropna()
-    if resample_rule:
-        close_series = close_series.resample(resample_rule).last().dropna()
+if results:
+    df_res = pd.DataFrame(results)
 
-    # محاسبه خط MACD خام
-    macd_series = compute_macd_line(close_series, macd_fast, macd_slow)
-    macd_series = macd_series.dropna()
+    min_dtw, max_dtw = df_res['dist_dtw'].min(), df_res['dist_dtw'].max()
+    min_euc, max_euc = df_res['dist_euc'].min(), df_res['dist_euc'].max()
 
-    if len(macd_series) < n_candles:
-        print(f"  تعداد کندل‌های معتبر MACD ({len(macd_series)}) کمتر از {n_candles} است. رد می‌شود.")
-        continue
+    range_dtw = max_dtw - min_dtw if max_dtw != min_dtw else 1
+    range_euc = max_euc - min_euc if max_euc != min_euc else 1
 
-    # الگوها: بلند (120) و کوتاه (25)
-    pattern_macd_long = macd_series.iloc[-n_candles:].values
-    pattern_dates = macd_series.index[-n_candles:]
-    pattern_start_date = pattern_dates[0].normalize().tz_localize(None)
+    df_res['norm_dtw'] = (df_res['dist_dtw'] - min_dtw) / range_dtw
+    df_res['norm_euc'] = (df_res['dist_euc'] - min_euc) / range_euc
 
-    pattern_macd_short = pattern_macd_long[-n_candles_short:]
+    w_dtw, w_euc = 0.5, 0.5
+    df_res['combined_score'] = w_dtw * df_res['norm_dtw'] + w_euc * df_res['norm_euc']
 
-    pattern_norm_long = z_norm(pattern_macd_long)
-    pattern_norm_short = z_norm(pattern_macd_short)
+    df_top = df_res.sort_values('combined_score').head(SHOW_N)
 
-    print(f"الگوی {crypto_symbol} ({tf_input}) با {n_candles} کندل بلند و {n_candles_short} کندل کوتاه از MACD استخراج شد.")
-    print(f"بازه الگو: {pattern_dates[0]} تا {pattern_dates[-1]}")
+    # ساخت پیام متنی برای تلگرام
+    message_lines = []
+    message_lines.append("🏆 <b>برترین ارزهای مشابه الگوی BTC</b>\n")
+    message_lines.append("(MACD ۳۰ دقیقه‌ای در برابر الگوی هفتگی 2015-2016)\n")
+    for idx, row in df_top.iterrows():
+        line = (
+            f"🔸 <b>{row['symbol']}</b>\n"
+            f"   DTW: {row['dist_dtw']:.4f} | Euc: {row['dist_euc']:.4f}\n"
+            f"   ترکیبی: {row['combined_score']:.4f} | بروزرسانی: {row['last_30m']}\n"
+        )
+        message_lines.append(line)
+    message_lines.append(f"\n📅 تعداد کل ارزهای اسکن‌شده: {len(top_symbols)}")
+    message = "\n".join(message_lines)
 
-    def search_raw_matches(symbol, interval="1d", window_fraction=0.5):
-        df = yf.download(symbol, interval=interval, period="max")
-        if df.empty:
-            if symbol.endswith("-USD"):
-                try:
-                    df = fetch_lbank_data(symbol, interval)
-                except:
-                    return None, []
-            else:
-                return None, []
-        if df.empty:
-            return None, []
+    # ارسال به تلگرام
+    send_telegram_message(message)
 
-        close = df['Close'].dropna()
-        if len(close) < n_candles:
-            return None, []
-
-        macd_line = compute_macd_line(close, macd_fast, macd_slow).dropna()
-
-        if len(macd_line) < n_candles:
-            return None, []
-
-        N = len(macd_line)
-        macd_vals = macd_line.values
-        window_size = max(2, int(window_fraction * n_candles))
-        window_size_short = max(2, int(window_fraction * n_candles_short))
-        raw_matches = []
-
-        for i in range(N - n_candles + 1):
-            window_end_date = macd_line.index[i + n_candles - 1]
-            window_end_date_naive = window_end_date.normalize().tz_localize(None)
-            if window_end_date_naive >= pattern_start_date:
-                continue
-
-            win_macd_long = macd_vals[i:i + n_candles]
-            win_macd_short = win_macd_long[-n_candles_short:]
-
-            win_norm_long = z_norm(win_macd_long)
-            win_norm_short = z_norm(win_macd_short)
-
-            # فاصله DTW برای الگوی بلند
-            dist_long = dtw(pattern_norm_long, win_norm_long,
-                            keep_internals=False,
-                            window_type='sakoechiba',
-                            window_args={'window_size': window_size}).distance
-
-            # فاصله DTW برای الگوی کوتاه
-            dist_short = dtw(pattern_norm_short, win_norm_short,
-                             keep_internals=False,
-                             window_type='sakoechiba',
-                             window_args={'window_size': window_size_short}).distance
-
-            # امتیاز ترکیبی با وزن برابر
-            combined_score = 0.5 * (dist_long / n_candles) + 0.5 * (dist_short / n_candles_short)
-
-            raw_matches.append((combined_score, dist_long, dist_short,
-                                macd_line.index[i], win_macd_long))
-
-        return macd_line, raw_matches
-
-    all_macd_series = {}
-    global_raw_matches = []
-
-    for sym in symbols_to_search:
-        macd_series_sym, raw_list = search_raw_matches(sym, interval=search_interval, window_fraction=0.5)
-        all_macd_series[sym] = macd_series_sym
-        if raw_list:
-            for item in raw_list:
-                global_raw_matches.append((sym,) + item)
-
-    if not global_raw_matches:
-        print("هیچ تطابقی برای این الگو یافت نشد. به نماد بعدی می‌رویم.")
-        continue
-
-    # ساخت لیست نهایی: (sym, combined_score, dist_long, dist_short, start_date, win_macd)
-    scored_matches = []
-    for match in global_raw_matches:
-        sym, combined_score, dist_long, dist_short, start_date, win_macd = match
-        scored_matches.append((sym, combined_score, dist_long, dist_short, start_date, win_macd))
-
-    # گروه‌بندی بر اساس نماد
-    symbol_matches = defaultdict(list)
-    for m in scored_matches:
-        sym = m[0]
-        symbol_matches[sym].append(m)
-
-    # انتخاب بهترین‌ها با جلوگیری از هم‌پوشانی
-    selected_per_symbol = []
-    for sym, matches in symbol_matches.items():
-        matches.sort(key=lambda x: x[1])  # مرتب‌سازی بر اساس combined_score
-        selected = []
-        for match in matches:
-            start = match[4]
-            overlap = False
-            for sel in selected:
-                if abs((start - sel[4]).days) < n_candles:
-                    overlap = True
-                    break
-            if not overlap:
-                selected.append(match)
-                if len(selected) == 2:
-                    break
-        selected_per_symbol.extend(selected)
-
-    selected_per_symbol.sort(key=lambda x: x[1])
-
-    # حذف آستانه و انتخاب بهترین تطابق کلی
-    if not selected_per_symbol:
-        print(f"هیچ تطابقی برای {crypto_symbol} یافت نشد.")
-        continue
-
-    best_match = selected_per_symbol[0]
-
-    print(f"\nبهترین تطابق برای الگوی {crypto_symbol}:")
-    print("─" * 80)
-    sym, combined_score, dist_long, dist_short, start_date, win_macd = best_match
-    print(f"⭐ {sym} | امتیاز ترکیبی: {combined_score:.3f} | DTW بلند: {dist_long:.2f} | DTW کوتاه: {dist_short:.2f} | شروع: {start_date.strftime('%Y-%m-%d')}")
-
-    msg = (
-        f"📊 <b>الگو:</b> {tf_input} {crypto_symbol}\n"
-        f"🪙 <b>نماد:</b> {sym}\n"
-        f"📅 <b>تاریخ شروع:</b> {start_date.strftime('%Y-%m-%d')}\n"
-        f"⭐ <b>امتیاز ترکیبی:</b> {combined_score:.3f}\n"
-        f"<i>DTW بلند:</i> {dist_long:.2f}\n"
-        f"<i>DTW کوتاه:</i> {dist_short:.2f}"
-    )
-    all_telegram_parts.append(msg)
-
-    # ═══════════════════════════════════════════════════════════
-    # رسم نمودار ساده: الگو و بهترین تطابق
-    # ═══════════════════════════════════════════════════════════
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-
-    # نمودار الگو (بلند)
-    axes[0].plot(pattern_dates, pattern_macd_long, label='MACD', color='purple', linewidth=2)
-    axes[0].set_title(f'Pattern: {crypto_symbol} ({tf_input})')
-    axes[0].legend()
-    axes[0].grid(True)
-
-    # نمودار بهترین تطابق
-    color = symbol_colors.get(sym, 'gray')
-    if search_interval == "1d":
-        end_date = start_date + pd.DateOffset(days=n_candles - 1)
-    else:
-        end_date = start_date + pd.DateOffset(weeks=n_candles - 1)
-    date_range = pd.date_range(start=start_date, end=end_date, periods=n_candles)
-    axes[1].plot(date_range, win_macd, color=color, linewidth=2.5, label='MACD')
-    axes[1].set_title(f'Best Match: {sym}\nScore: {combined_score:.3f} | {start_date.strftime("%Y-%m-%d")}')
-    axes[1].legend()
-    axes[1].grid(True)
-
-    plt.suptitle(f'Best match for {crypto_symbol} pattern (MACD)')
-    plt.tight_layout()
-    plt.savefig(f"pattern_plot_{crypto_symbol}.png")
-    plt.close(fig)
-
-if all_telegram_parts:
-    print("\nارسال همهٔ نتایج به تلگرام...")
-    full_message = "\n\n".join(all_telegram_parts)
-    send_telegram_long_message(full_message)
-    print("ارسال انجام شد.")
+    # چاپ در لاگ هم برای بررسی
+    print("\n" + message)
 else:
-    print("\nهیچ پیامی برای ارسال وجود ندارد.")
+    print("\n❌ نتیجه‌ای یافت نشد.")
+    send_telegram_message("❌ در اسکن امروز هیچ نتیجه‌ای یافت نشد.")
 
-print("\n\nپایان تحلیل تمام نمادها.")
+print("\n✅ اسکن کامل شد!")
