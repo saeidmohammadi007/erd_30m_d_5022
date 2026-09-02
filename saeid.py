@@ -76,9 +76,6 @@ def dtw_distance(x, y, window=None):
             dtw[i, j] = cost + min(dtw[i-1, j], dtw[i, j-1], dtw[i-1, j-1])
     return np.sqrt(dtw[n, n])
 
-def euclidean_distance(x, y):
-    return np.sqrt(np.sum((x - y) ** 2))
-
 def send_telegram_message(text):
     token = os.environ.get('TELEGRAM_BOT_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
@@ -144,13 +141,11 @@ for sym in tqdm(top_symbols, desc="اسکن ۳۰ دقیقه‌ای"):
         cur_norm = (current - cur_mean) / cur_std
 
         dist_dtw = dtw_distance(pat_norm, cur_norm, window=WINDOW)
-        dist_euc = euclidean_distance(pat_norm, cur_norm)
 
         last_time = macd.index[-1].strftime('%Y-%m-%d %H:%M')
         results.append({
             'symbol': sym,
             'dist_dtw': dist_dtw,
-            'dist_euc': dist_euc,
             'last_30m': last_time
         })
         time.sleep(0.3)
@@ -160,29 +155,17 @@ for sym in tqdm(top_symbols, desc="اسکن ۳۰ دقیقه‌ای"):
 if results:
     df_res = pd.DataFrame(results)
 
-    min_dtw, max_dtw = df_res['dist_dtw'].min(), df_res['dist_dtw'].max()
-    min_euc, max_euc = df_res['dist_euc'].min(), df_res['dist_euc'].max()
-
-    range_dtw = max_dtw - min_dtw if max_dtw != min_dtw else 1
-    range_euc = max_euc - min_euc if max_euc != min_euc else 1
-
-    df_res['norm_dtw'] = (df_res['dist_dtw'] - min_dtw) / range_dtw
-    df_res['norm_euc'] = (df_res['dist_euc'] - min_euc) / range_euc
-
-    w_dtw, w_euc = 0.5, 0.5
-    df_res['combined_score'] = w_dtw * df_res['norm_dtw'] + w_euc * df_res['norm_euc']
-
-    df_top = df_res.sort_values('combined_score').head(SHOW_N)
+    # رتبه‌بندی فقط بر اساس DTW (کمترین = بهترین)
+    df_top = df_res.sort_values('dist_dtw').head(SHOW_N)
 
     # ساخت پیام متنی برای تلگرام
     message_lines = []
-    message_lines.append("🏆 <b>برترین ارزهای مشابه الگوی BTC</b>\n")
-    message_lines.append("(MACD ۳۰ دقیقه‌ای در برابر الگوی هفتگی 2015-2016)\n")
+    message_lines.append("🏆 <b>برترین ارزهای مشابه الگوی BTC (فقط DTW)</b>\n")
+    message_lines.append("(MACD ۳۰ دقیقه‌ای در برابر الگوی هفتگی 2015-2016 با محدودیت Sakoe-Chiba)\n")
     for idx, row in df_top.iterrows():
         line = (
             f"🔸 <b>{row['symbol']}</b>\n"
-            f"   DTW: {row['dist_dtw']:.4f} | Euc: {row['dist_euc']:.4f}\n"
-            f"   ترکیبی: {row['combined_score']:.4f} | بروزرسانی: {row['last_30m']}\n"
+            f"   DTW: {row['dist_dtw']:.4f} | بروزرسانی: {row['last_30m']}\n"
         )
         message_lines.append(line)
     message_lines.append(f"\n📅 تعداد کل ارزهای اسکن‌شده: {len(top_symbols)}")
