@@ -1,9 +1,7 @@
 name: LBank Pattern Scanner
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # اجرا هر روز ساعت 00:00 UTC
-  workflow_dispatch:      # امکان اجرای دستی از تب Actions
+  workflow_dispatch:      # اجرای دستی از تب Actions
 
 jobs:
   scan:
